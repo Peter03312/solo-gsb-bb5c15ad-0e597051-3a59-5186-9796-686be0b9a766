@@ -21,6 +21,10 @@
 >    `POST /api/v1/transfer-reconcile`
 >    （[说明见此节](#配液核对实测浓度对账本轮新增)）：提交原流程请求、统一容差与若干实测观测，
 >    服务先沿用原预检校验与模拟，再用**未四舍五入**的预测浓度逐条对账。
+> 3. **预检风险的物料来源溯源** `POST /api/v1/precheck-source-trace` 与
+>    `POST /api/v1/transfer-source-trace`
+>    （[说明见此节](#预检风险物料来源溯源本轮新增)）：请求体与原预检**完全相同**，
+>    响应包含**原预检结果**与每条风险涉及试剂在**触发时刻**的来源批次、仍存纯物量及其占比。
 >
 > 原 `/api/v1/precheck` 单容器预检的**请求与响应完全保持兼容，启动方式不变**
 > （仍是同一个 `uvicorn app.main:app` / `docker compose up`，同一端口 8000）。
@@ -34,6 +38,7 @@
 - [API 说明](#api-说明)
 - [双容器转移预检（本轮新增）](#双容器转移预检本轮新增)
 - [配液核对：实测浓度对账（本轮新增）](#配液核对实测浓度对账本轮新增)
+- [预检风险物料来源溯源（本轮新增）](#预检风险物料来源溯源本轮新增)
 - [逐步状态与浓度模型](#逐步状态与浓度模型)
 - [操作类型](#操作类型)
 - [规则、阈值与接触计时](#规则阈值与接触计时)
@@ -83,6 +88,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | `POST` | `/api/v1/transfer-precheck` | **双容器转移预检**：两只容器之间的定量转移与静置，返回带容器编号的风险与两侧状态 |
 | `POST` | `/api/v1/reconcile` | **单容器配液核对**：原预检请求 + 统一容差 + 实测观测，返回原预检结果、逐条预测/偏差与最早超差位置 |
 | `POST` | `/api/v1/transfer-reconcile` | **双容器配液核对**：同上对账语义，每条观测另须指定容器编号 |
+| `POST` | `/api/v1/precheck-source-trace` | **单容器风险来源溯源**：请求同 `/api/v1/precheck`，返回原预检结果 + 每条风险涉及试剂的来源批次、触发时仍存纯物量与占比 |
+| `POST` | `/api/v1/transfer-source-trace` | **双容器风险来源溯源**：请求同 `/api/v1/transfer-precheck`，返回原转移预检结果 + 带来源容器的逐条风险来源 |
 
 ### 请求体
 
@@ -366,15 +373,161 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
+## 预检风险物料来源溯源（本轮新增）
+
+`POST /api/v1/precheck-source-trace`（单容器）与
+`POST /api/v1/transfer-source-trace`（双容器）回答“**触发这条风险的物料是从哪来的**”：
+
+- **请求体与原预检逐字段相同**（单容器 `/api/v1/precheck`、双容器 `/api/v1/transfer-precheck`），
+  不需要任何新字段；非法输入沿用原预检的**整单拒绝**（同一套错误码、HTTP 400，不返回任何部分结果）。
+- 响应中的 `precheck` 即**原预检结果**，与原端点响应逐字段一致；
+  另给与 `precheck.findings` **一一对应、同序**的 `risk_sources[]`（以 `finding_index` 对齐）；
+  **无风险时 `risk_sources` 为空数组**。
+- 原预检接口 `/api/v1/precheck`、`/api/v1/transfer-precheck`（以及两个 reconcile）的
+  **请求与响应保持兼容、不含任何溯源字段**。
+
+### 来源标识
+
+| 场景 | 来源批次标识 |
+| --- | --- |
+| 单容器初始液体 | 以**试剂编号**标识：`origin="initial"` + `reagent_id` |
+| 单容器后续加液（add） | 以**步骤序号**标识：`origin="step"` + `seq` + `reagent_id` |
+| 双容器初始液体 | 以**容器编号 + 试剂编号**标识：`origin="vessel"` + `vessel_id` + `reagent_id` |
+
+### 份额口径与操作语义
+
+- 每条风险的每个涉及试剂列出其各来源批次：
+  - `pure_volume_ml`：**风险触发时该批次仍存**的纯物体积（毫升，4 位小数）；
+  - `fraction`：该批次占**触发时刻、触发容器内该试剂纯物总量**的比例
+    （0~1，6 位小数；同一试剂各批次**合计为 1**）；
+  - `pure_volume_ml`（试剂级）：触发时刻该试剂在触发容器中的纯物总量。
+- **稀释（dilute）不产生来源**：纯水无批次，仅稀释各组分浓度。
+- **倒出（pour）与跨容器转移（transfer）按充分混合比例同步分摊**：每个来源批次按
+  转出体积占源容器当前体积的比例缩减，转入侧同键合并。
+- **清洗（clean）清空来源**：清洗后重新加入的同试剂是全新批次，与清洗前无关。
+- **同一试剂再次加入须与旧来源分开**：不同 `seq`（单容器）或不同原始容器（双容器）
+  的同试剂批次永远分列；跨容器转移**不产生新来源**，批次保留其原始容器标识，
+  即使再次转回原容器，同键批次也只合并、不另立。
+- **材质风险**（如 HF 进玻璃）在风险条目中另给触发容器材质：
+  - 单容器：`vessel_material`、`material_id`（取自规则材质侧，如 `glass`）；
+  - 双容器：另带 `vessel_id`（触发容器）；
+  - **材质不给液体份额**：`reagents[]` 只列液相试剂（HF），不出现材质实体。
+  - 试剂-试剂风险的 `material_id` 为 `null`，但仍带触发容器的 `vessel_material`。
+- **超时风险**在“时间推进后、该步操作执行前”结算，来源按**该步操作前的物料归属**快照；
+  随后的倒出或跨容器转空**不会改写已触发风险**的来源明细。
+  立即类风险（禁配、立即材质）在操作完成后的新状态上触发，来源取操作后归属。
+
+### 响应示例（单容器）
+
+初始 10% 漂白水 100 mL → 步骤 1 加 3% 盐酸 100 mL（酸仅 1.5%，未过 5% 阈值）→
+步骤 2 倒出 40 mL → 步骤 3 再加 30% 盐酸 50 mL，F01 在步骤 3 首次触发；
+盐酸的两个加液批次分开列示（步骤 1 批次已经倒出分摊）：
+
+```json
+{
+  "precheck": { "...": "与 POST /api/v1/precheck 响应逐字段一致" },
+  "risk_sources": [
+    {
+      "finding_index": 0,
+      "seq": 3,
+      "category": "forbidden_mix",
+      "rule_id": "F01",
+      "vessel_material": "glass",
+      "material_id": null,
+      "reagents": [
+        {
+          "reagent_id": "hcl",
+          "pure_volume_ml": 17.4,
+          "lots": [
+            {"origin": "step", "reagent_id": "hcl", "seq": 1,
+             "pure_volume_ml": 2.4, "fraction": 0.137931},
+            {"origin": "step", "reagent_id": "hcl", "seq": 3,
+             "pure_volume_ml": 15.0, "fraction": 0.862069}
+          ]
+        },
+        {
+          "reagent_id": "naocl",
+          "pure_volume_ml": 8.0,
+          "lots": [
+            {"origin": "initial", "reagent_id": "naocl", "seq": null,
+             "pure_volume_ml": 8.0, "fraction": 1.0}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+双容器响应中每条 `risk_sources[]` 额外带 `vessel_id`（触发容器），批次结构为
+`{"origin": "vessel", "vessel_id": "<原始容器>", "reagent_id": "...",
+"pure_volume_ml": ..., "fraction": ...}`；同试剂在两只容器的初始批次即使在目标容器
+汇合也分开列示。完整样例见
+[`examples/source_trace_request.json`](examples/source_trace_request.json) +
+[`examples/source_trace_response.json`](examples/source_trace_response.json)（单容器）、
+[`examples/transfer_source_trace_request.json`](examples/transfer_source_trace_request.json) +
+[`examples/transfer_source_trace_response.json`](examples/transfer_source_trace_response.json)（双容器）。
+
+### 调用示例
+
+```bash
+# 单容器：请求体即原预检请求
+curl -s http://localhost:8000/api/v1/precheck-source-trace \
+  -H 'Content-Type: application/json' \
+  --data @examples/source_trace_request.json | python -m json.tool
+
+# 双容器：请求体即原转移预检请求
+curl -s http://localhost:8000/api/v1/transfer-source-trace \
+  -H 'Content-Type: application/json' \
+  --data @examples/transfer_source_trace_request.json | python -m json.tool
+```
+
+```python
+import requests
+
+payload = {
+    "vessel_material": "glass",
+    "temperature_c": 22.0,
+    "initial_liquid": [{"reagent_id": "naocl", "concentration": 10, "volume_ml": 100}],
+    "steps": [
+        {"seq": 1, "op": "add", "reagent_id": "hcl",
+         "concentration": 3, "volume_ml": 100},
+        {"seq": 2, "op": "pour", "volume_ml": 40, "at_seconds": 10},
+        {"seq": 3, "op": "add", "reagent_id": "hcl",
+         "concentration": 30, "volume_ml": 50, "at_seconds": 20},
+    ],
+    "contact_allowances": [],
+}
+r = requests.post("http://localhost:8000/api/v1/precheck-source-trace",
+                  json=payload, timeout=10)
+r.raise_for_status()
+d = r.json()
+for rs in d["risk_sources"]:
+    f = d["precheck"]["findings"][rs["finding_index"]]
+    print(f"风险 {rs['rule_id']}（步骤 {rs['seq']}）：{f['blocking_reason']}")
+    for rg in rs["reagents"]:
+        for lot in rg["lots"]:
+            where = f"步骤 {lot['seq']} 加入" if lot["origin"] == "step" else "初始液体"
+            print(f"  {rg['reagent_id']} <- {where}：仍存 {lot['pure_volume_ml']} mL，"
+                  f"占该试剂 {lot['fraction']:.1%}")
+```
+
+---
+
 ## 逐步状态与浓度模型
 
 采用透明的“**纯物体积**”簿记（体积可加、充分混合假设）：
 
 - 每个试剂记录纯物体积 `pure_ml`，当前浓度 `= pure_ml / 液体总体积 × 100%`；
 - **add**：`pure_ml += concentration × volume / 100`，总体积增加；
-- **dilute**：仅总体积增加（加纯水），各组分浓度等比下降；
+- **dilute**：仅总体积增加（加纯水），各组分浓度等比下降；**纯水不登记来源**；
 - **pour**：按倒出比例同步缩减总体积与每个 `pure_ml`（浓度不变）；完全倒空会终止全部接触片段；
 - **clean**：清空全部组分与总体积、所有接触计时归零，置 `cleaned=true`。
+
+每个试剂的纯物量另按**来源批次**记账（与 `pure_ml` 同步增减）：初始液体 / 加液步骤 /
+双容器初始（容器+试剂）各为独立批次；pour 与跨容器 transfer 按充分混合比例同步分摊，
+clean 清空，dilute 不动；同键批次相遇合并、不同键分开。来源溯源接口在每条风险触发瞬间
+对涉及试剂的批次存量做快照，详见[预检风险物料来源溯源](#预检风险物料来源溯源本轮新增)。
 
 规则只在组分浓度**达到规则侧阈值**（默认 1%，强酸/强碱等规则更高）时生效，
 痕量组分不会触发——稀释越过阈值会结束对应接触片段，重新越过则作为**新片段**重新计时。
@@ -613,6 +766,12 @@ python3 -m pytest -q
 （同位置按提交顺序）定位、乱序 seq 归一化、空观测仅返回预检、清洗后位置按零，
 以及未知步骤/容器/试剂、重复观测、浓度越界、非法容差、原流程无效整单拒绝且无部分对账
 （`tests/test_reconcile_api.py` 27 个、`tests/test_transfer_reconcile_api.py` 16 个用例）。
+来源溯源另覆盖：初始/加液/双容器初始三类批次标识、同试剂分次加入分开、倒出与跨容器
+转移按比例分摊、同键回流合并、稀释不产生来源、清洗清空、超时按该步操作前归属快照且
+倒出/转空不改写已触发风险、材质风险标注触发容器与材质且不参与液体份额、无风险明细为空、
+非法输入整单拒绝、原预检接口请求/响应逐字段兼容
+（`tests/test_source_trace_api.py` 17 个、
+`tests/test_transfer_source_trace_api.py` 13 个用例）。
 
 ## 项目结构
 
@@ -624,17 +783,20 @@ app/
   errors.py             # 错误码
   validator.py          # 单容器逐项校验 + 归一化执行计划
   transfer_validator.py # 双容器逐项校验（容器/转移/超量/空源/时序）+ 执行计划
-  runtime.py            # 单只容器的状态机：浓度簿记 + 接触片段对账与超时
+  runtime.py            # 单只容器的状态机：浓度簿记、来源批次台账、接触片段对账与超时
   engine.py             # 单容器预检：重放计划、事件转 findings、快照
   transfer_engine.py    # 双容器预检：两侧 runtime + transfer/hold 重放
   responses.py          # 预检响应组装（预检端点与配液核对共用，保证 precheck 字段一致）
   reconcile.py          # 配液核对：原校验/模拟 + 未四舍五入预测浓度逐条对账、最早超差定位
+  provenance.py         # 风险物料来源溯源：触发瞬间来源批次快照 -> risk_sources（单/双容器）
   main.py               # FastAPI 路由与异常映射
-examples/                 # curl 可用的请求/响应样例（含 transfer_*、reconcile_* 样例）
+examples/                 # curl 可用的请求/响应样例（含 transfer_*、reconcile_*、*_source_trace_* 样例）
 tests/test_api.py
 tests/test_transfer_api.py
 tests/test_reconcile_api.py
 tests/test_transfer_reconcile_api.py
+tests/test_source_trace_api.py
+tests/test_transfer_source_trace_api.py
 Dockerfile
 docker-compose.yml
 ```

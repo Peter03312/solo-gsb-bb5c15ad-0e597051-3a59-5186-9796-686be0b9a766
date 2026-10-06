@@ -86,6 +86,17 @@ class TwoVesselEngine:
             if not tok.startswith("material:"):
                 concentrations[tok] = round(c, 4)
 
+        # 触发瞬间的物料来源快照（仅液相试剂；材质不给液体份额）。
+        # 超时事件在本步操作执行前结算，取到的正是操作前的物料归属，
+        # 随后的倒出/转空不会再改写已触发风险的快照。
+        ev_snapshot = getattr(ev, "source_snapshot", None)
+        if ev_snapshot is None:
+            ev_snapshot = {
+                tok: rt.source_lots(tok)
+                for tok in (ta, tb)
+                if not tok.startswith("material:")
+            }
+
         if category == "forbidden_mix":
             br = f"容器 {rt.vessel_id}：禁配组合：{rule.name}（{rule.id}）在步骤 {seq} 首次共存"
         elif category == "material_incompatible":
@@ -119,6 +130,7 @@ class TwoVesselEngine:
                 "reason": rule.reason,
                 "guidance": rule.guidance,
                 "blocking_reason": br,
+                "_source_snapshot": ev_snapshot,
             }
         )
 
@@ -133,8 +145,10 @@ class TwoVesselEngine:
     # ---------------- 主流程 ----------------
     def run(self) -> dict[str, Any]:
         # 初始液体（统一 t=0）：初始状态也检查风险
+        # 双容器初始液体以（容器编号, 试剂编号）标识来源；转移只携带原键，不产生新来源
         for rt, spec in zip(self.runtimes, self.plan.vessels):
-            rt.load_initial(spec.initial)
+            vid = spec.vessel_id
+            rt.load_initial(spec.initial, lot_key=lambda rid, v=vid: ("vessel", v, rid))
         for rt in self.runtimes:
             self._reconcile(rt, seq=0)
         self.traces.append(self._trace(None, "initial"))
@@ -151,8 +165,8 @@ class TwoVesselEngine:
             if st.op == "transfer":
                 src = self.by_id[st.from_vessel]  # type: ignore[index]
                 dst = self.by_id[st.to_vessel]  # type: ignore[index]
-                moved = src.transfer_out(st.volume_ml)  # type: ignore[arg-type]
-                dst.transfer_in(moved, st.volume_ml)  # type: ignore[arg-type]
+                moved_pure, moved_lots = src.transfer_out(st.volume_ml)  # type: ignore[arg-type]
+                dst.transfer_in(moved_pure, moved_lots, st.volume_ml)  # type: ignore[arg-type]
 
             # 3) 两侧对账（先源后目标；同刻按 seq 已定序，同一容器内按规则顺序确定）
             if st.op == "transfer":

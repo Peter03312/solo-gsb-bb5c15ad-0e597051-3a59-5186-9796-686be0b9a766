@@ -307,3 +307,69 @@ class TransferReconcileResponse(_Strict):
     first_out_of_tolerance: TransferFirstOutOfTolerance | None = None
     precheck: TransferPrecheckResponse = Field(..., description="原转移预检风险结果（与 POST /api/v1/transfer-precheck 响应一致）")
     observations: list[TransferReconcileItem]
+
+
+# ---------------------------------------------------------------------------
+# 预检风险来源溯源响应（本轮新增）
+# ---------------------------------------------------------------------------
+class SourceLotOut(_Strict):
+    origin: Literal["initial", "step"] = Field(..., description="initial=初始液体；step=后续加液步骤")
+    reagent_id: str = Field(..., description="该批次加入时的试剂编号")
+    seq: int | None = Field(None, description="origin=step 时的步骤序号；初始液体为 null")
+    pure_volume_ml: float = Field(..., description="风险触发时，该来源批次仍存的纯物体积（毫升，4 位小数）")
+    fraction: float = Field(..., description="该批次占触发时刻该试剂纯物总量的比例（0~1，6 位小数；同试剂各批次合计为 1）")
+
+
+class VesselSourceLotOut(_Strict):
+    origin: Literal["vessel"] = Field(..., description="双容器初始液体（以容器编号与试剂编号标识）")
+    vessel_id: str = Field(..., description="该批次原始所在容器编号；跨容器转移不改变其来源归属")
+    reagent_id: str = Field(..., description="该批次初始装入时的试剂编号")
+    pure_volume_ml: float = Field(..., description="风险触发时，该来源批次仍存的纯物体积（毫升，4 位小数）")
+    fraction: float = Field(..., description="该批次占触发时刻、触发容器内该试剂纯物总量的比例（0~1，6 位小数）")
+
+
+class TracedReagent(_Strict):
+    reagent_id: str = Field(..., description="风险涉及的试剂编号")
+    pure_volume_ml: float = Field(..., description="触发时刻该试剂在触发容器中的纯物总量（毫升，4 位小数）")
+    lots: list[SourceLotOut] = Field(..., description="该试剂各来源批次（同一试剂再次加入分开列示）")
+
+
+class VesselTracedReagent(_Strict):
+    reagent_id: str
+    pure_volume_ml: float
+    lots: list[VesselSourceLotOut]
+
+
+class RiskSource(_Strict):
+    finding_index: int = Field(..., description="对应 precheck.findings 的下标（排序与原预检一致）")
+    seq: int | None = Field(..., description="首次触发步骤序号；初始液体触发为 0")
+    category: Literal["forbidden_mix", "overtime_contact", "material_incompatible"]
+    rule_id: str
+    vessel_material: str = Field(..., description="触发容器材质编号（材质风险据此标明容器材质）")
+    material_id: str | None = Field(
+        None, description="材质风险所涉材质编号（取自规则材质侧）；试剂-试剂风险为 null，材质不参与液体份额"
+    )
+    reagents: list[TracedReagent] = Field(
+        ..., description="风险涉及试剂在触发时刻的来源明细；材质实体不给液体份额"
+    )
+
+
+class TransferRiskSource(RiskSource):
+    vessel_id: str = Field(..., description="触发容器编号")
+    reagents: list[VesselTracedReagent] = Field(..., description="触发容器内涉及试剂的来源明细")
+
+
+class SourceTraceResponse(_Strict):
+    precheck: PrecheckResponse = Field(..., description="原预检结果（与 POST /api/v1/precheck 响应逐字段一致）")
+    risk_sources: list[RiskSource] = Field(
+        ..., description="逐条风险的物料来源溯源（与 precheck.findings 一一对应）；无风险时为空数组"
+    )
+
+
+class TransferSourceTraceResponse(_Strict):
+    precheck: TransferPrecheckResponse = Field(
+        ..., description="原转移预检结果（与 POST /api/v1/transfer-precheck 响应逐字段一致）"
+    )
+    risk_sources: list[TransferRiskSource] = Field(
+        ..., description="逐条风险的物料来源溯源（与 precheck.findings 一一对应）；无风险时为空数组"
+    )

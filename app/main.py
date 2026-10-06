@@ -16,11 +16,14 @@ from .models import (
     PrecheckResponse,
     ReconcileRequest,
     ReconcileResponse,
+    SourceTraceResponse,
     TransferPrecheckRequest,
     TransferPrecheckResponse,
     TransferReconcileRequest,
     TransferReconcileResponse,
+    TransferSourceTraceResponse,
 )
+from .provenance import build_source_trace, build_transfer_source_trace
 from .reconcile import reconcile_single, reconcile_transfer
 from .responses import build_precheck_response, build_transfer_precheck_response
 from .rules import RULESET_VERSION, RULES_BY_ID
@@ -30,12 +33,13 @@ from .validator import build_plan
 
 app = FastAPI(
     title="化学试剂混配风险预检 API",
-    version="1.2.0",
+    version="1.3.0",
     description=(
         "提交容器初始液体、按顺序执行的加液步骤、试剂浓度与体积，以及容器材质和温度；"
         "逐步计算混配后各组分浓度，识别禁配组合、超时接触与材质不相容。"
         "另提供双容器转移预检 /api/v1/transfer-precheck，"
-        "以及单/双容器实测浓度核对 /api/v1/reconcile、/api/v1/transfer-reconcile。"
+        "单/双容器实测浓度核对 /api/v1/reconcile、/api/v1/transfer-reconcile，"
+        "以及风险物料来源溯源 /api/v1/precheck-source-trace、/api/v1/transfer-source-trace。"
     ),
 )
 
@@ -133,3 +137,19 @@ async def reconcile(req: ReconcileRequest) -> ReconcileResponse:
 async def transfer_reconcile(req: TransferReconcileRequest) -> TransferReconcileResponse:
     """双容器配液核对：沿用原转移预检校验与模拟，按容器对账实测浓度与预测浓度。"""
     return reconcile_transfer(req)
+
+
+@app.post("/api/v1/precheck-source-trace", response_model=SourceTraceResponse)
+async def precheck_source_trace(req: PrecheckRequest) -> SourceTraceResponse:
+    """单容器预检风险的物料来源溯源：原预检结果 + 每条风险涉及试剂的来源批次与份额。"""
+    plan = build_plan(req)
+    result = simulate(plan)
+    return build_source_trace(plan, result)
+
+
+@app.post("/api/v1/transfer-source-trace", response_model=TransferSourceTraceResponse)
+async def transfer_source_trace(req: TransferPrecheckRequest) -> TransferSourceTraceResponse:
+    """双容器预检风险的物料来源溯源：原转移预检结果 + 每条风险涉及试剂的来源批次与份额。"""
+    plan = build_transfer_plan(req)
+    result = simulate_transfer(plan)
+    return build_transfer_source_trace(plan, result)

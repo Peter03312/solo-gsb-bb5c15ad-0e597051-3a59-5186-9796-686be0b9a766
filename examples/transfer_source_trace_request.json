@@ -1,0 +1,24 @@
+{
+  "vessels": [
+    {
+      "vessel_id": "A",
+      "vessel_material": "hdpe",
+      "initial_liquid": [
+        {"reagent_id": "hcl", "concentration": 30.0, "volume_ml": 100.0}
+      ]
+    },
+    {
+      "vessel_id": "B",
+      "vessel_material": "hdpe",
+      "initial_liquid": [
+        {"reagent_id": "naocl", "concentration": 12.0, "volume_ml": 100.0},
+        {"reagent_id": "hcl", "concentration": 3.0, "volume_ml": 100.0}
+      ]
+    }
+  ],
+  "temperature_c": 22.0,
+  "steps": [
+    {"seq": 1, "op": "transfer", "from_vessel": "A", "to_vessel": "B", "volume_ml": 100.0, "at_seconds": 30.0}
+  ],
+  "contact_allowances": []
+}

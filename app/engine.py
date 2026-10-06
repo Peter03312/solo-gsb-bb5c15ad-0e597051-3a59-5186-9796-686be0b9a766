@@ -60,6 +60,16 @@ class Engine:
             if not tok.startswith("material:"):
                 concentrations[tok] = round(c, 4)
 
+        # 触发瞬间的物料来源快照：仅对涉及的液相试剂（材质不参与液体份额）。
+        # 超时事件在操作执行前结算，此时 runtime 状态正是“该步操作前”的归属。
+        ev_snapshot = getattr(ev, "source_snapshot", None)
+        if ev_snapshot is None:
+            ev_snapshot = {
+                tok: self.runtime.source_lots(tok)
+                for tok in (ta, tb)
+                if not tok.startswith("material:")
+            }
+
         if category == "forbidden_mix":
             br = f"禁配组合：{rule.name}（{rule.id}）在步骤 {seq} 首次共存"
         elif category == "material_incompatible":
@@ -88,6 +98,7 @@ class Engine:
                 "reason": rule.reason,
                 "guidance": rule.guidance,
                 "blocking_reason": br,
+                "_source_snapshot": ev_snapshot,
             }
         )
 
@@ -95,7 +106,11 @@ class Engine:
     def _apply(self, st: PlannedStep) -> None:
         rt = self.runtime
         if st.op == "add":
-            rt.apply_add(st.reagent_id, st.concentration, st.volume_ml)  # type: ignore[arg-type]
+            # 后续加液以步骤序号标识来源；同一试剂再次加入为独立批次
+            rt.apply_add(
+                st.reagent_id, st.concentration, st.volume_ml,  # type: ignore[arg-type]
+                lot_key=("step", st.seq, st.reagent_id),
+            )
         elif st.op == "dilute":
             rt.apply_dilute(st.volume_ml)  # type: ignore[arg-type]
         elif st.op == "pour":
