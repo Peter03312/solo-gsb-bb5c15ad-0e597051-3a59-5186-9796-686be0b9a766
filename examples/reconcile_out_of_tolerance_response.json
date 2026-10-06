@@ -1,0 +1,120 @@
+{
+  "tolerance_pp": 0.2,
+  "all_passed": false,
+  "first_out_of_tolerance": {
+    "observation_index": 1,
+    "at_initial": true,
+    "seq": null,
+    "reagent_id": "nacl",
+    "measured_concentration": 9.0,
+    "predicted_concentration": 10.0,
+    "deviation": 1.0,
+    "tolerance_pp": 0.2
+  },
+  "precheck": {
+    "safe": true,
+    "blocked": false,
+    "first_blocking_seq": null,
+    "ruleset_version": "chem-rules-2026-10-01",
+    "vessel_material": "hdpe",
+    "temperature_c": 20.0,
+    "findings": [],
+    "final_state": {
+      "seq": 2,
+      "op": "dilute",
+      "at_seconds": 20.0,
+      "liquid_volume_ml": 300.0,
+      "cleaned": false,
+      "components": [
+        {
+          "reagent_id": "koh",
+          "name": "氢氧化钾溶液",
+          "concentration": 3.3333,
+          "pure_volume_ml": 10.0
+        },
+        {
+          "reagent_id": "nacl",
+          "name": "氯化钠溶液",
+          "concentration": 3.3333,
+          "pure_volume_ml": 10.0
+        }
+      ]
+    },
+    "steps": [
+      {
+        "seq": 1,
+        "op": "add",
+        "at_seconds": 10.0,
+        "liquid_volume_ml": 200.0,
+        "cleaned": false,
+        "components": [
+          {
+            "reagent_id": "koh",
+            "name": "氢氧化钾溶液",
+            "concentration": 5.0,
+            "pure_volume_ml": 10.0
+          },
+          {
+            "reagent_id": "nacl",
+            "name": "氯化钠溶液",
+            "concentration": 5.0,
+            "pure_volume_ml": 10.0
+          }
+        ]
+      },
+      {
+        "seq": 2,
+        "op": "dilute",
+        "at_seconds": 20.0,
+        "liquid_volume_ml": 300.0,
+        "cleaned": false,
+        "components": [
+          {
+            "reagent_id": "koh",
+            "name": "氢氧化钾溶液",
+            "concentration": 3.3333,
+            "pure_volume_ml": 10.0
+          },
+          {
+            "reagent_id": "nacl",
+            "name": "氯化钠溶液",
+            "concentration": 3.3333,
+            "pure_volume_ml": 10.0
+          }
+        ]
+      }
+    ]
+  },
+  "observations": [
+    {
+      "observation_index": 0,
+      "at_initial": false,
+      "seq": 2,
+      "reagent_id": "nacl",
+      "measured_concentration": 3.4,
+      "predicted_concentration": 3.3333333333333335,
+      "deviation": 0.06666666666666643,
+      "passed": true
+    },
+    {
+      "observation_index": 1,
+      "at_initial": true,
+      "seq": null,
+      "reagent_id": "nacl",
+      "measured_concentration": 9.0,
+      "predicted_concentration": 10.0,
+      "deviation": 1.0,
+      "passed": false
+    },
+    {
+      "observation_index": 2,
+      "at_initial": false,
+      "seq": 1,
+      "reagent_id": "koh",
+      "measured_concentration": 5.05,
+      "predicted_concentration": 5.0,
+      "deviation": 0.04999999999999982,
+      "passed": true
+    }
+  ]
+}

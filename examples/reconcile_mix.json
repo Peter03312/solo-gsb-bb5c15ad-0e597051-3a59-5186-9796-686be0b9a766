@@ -1,0 +1,20 @@
+{
+  "request": {
+    "vessel_material": "glass",
+    "temperature_c": 22.0,
+    "initial_liquid": [
+      {"reagent_id": "naocl", "concentration": 10.0, "volume_ml": 100.0}
+    ],
+    "steps": [
+      {"seq": 1, "op": "add", "reagent_id": "hcl", "concentration": 30.0, "volume_ml": 50.0, "at_seconds": 30}
+    ],
+    "contact_allowances": []
+  },
+  "tolerance_pp": 0.5,
+  "observations": [
+    {"at_initial": true, "reagent_id": "naocl", "concentration": 10.2},
+    {"seq": 1, "reagent_id": "hcl", "concentration": 9.8},
+    {"seq": 1, "reagent_id": "naocl", "concentration": 6.67},
+    {"seq": 1, "reagent_id": "water", "concentration": 0.0}
+  ]
+}

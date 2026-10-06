@@ -1,0 +1,32 @@
+{
+  "request": {
+    "vessels": [
+      {
+        "vessel_id": "acid-bottle",
+        "vessel_material": "hdpe",
+        "initial_liquid": [
+          {"reagent_id": "hcl", "concentration": 30.0, "volume_ml": 100.0}
+        ]
+      },
+      {
+        "vessel_id": "bleach-tank",
+        "vessel_material": "hdpe",
+        "initial_liquid": [
+          {"reagent_id": "naocl", "concentration": 10.0, "volume_ml": 100.0}
+        ]
+      }
+    ],
+    "temperature_c": 22.0,
+    "steps": [
+      {"seq": 1, "op": "transfer", "from_vessel": "acid-bottle", "to_vessel": "bleach-tank", "volume_ml": 50.0, "at_seconds": 30.0}
+    ],
+    "contact_allowances": []
+  },
+  "tolerance_pp": 0.2,
+  "observations": [
+    {"at_initial": true, "vessel_id": "acid-bottle", "reagent_id": "hcl", "concentration": 29.9},
+    {"at_initial": true, "vessel_id": "bleach-tank", "reagent_id": "naocl", "concentration": 10.0},
+    {"seq": 1, "vessel_id": "bleach-tank", "reagent_id": "hcl", "concentration": 10.0},
+    {"seq": 1, "vessel_id": "bleach-tank", "reagent_id": "naocl", "concentration": 6.6}
+  ]
+}

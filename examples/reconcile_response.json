@@ -1,0 +1,121 @@
+{
+  "tolerance_pp": 0.5,
+  "all_passed": true,
+  "first_out_of_tolerance": null,
+  "precheck": {
+    "safe": false,
+    "blocked": true,
+    "first_blocking_seq": 1,
+    "ruleset_version": "chem-rules-2026-10-01",
+    "vessel_material": "glass",
+    "temperature_c": 22.0,
+    "findings": [
+      {
+        "seq": 1,
+        "category": "forbidden_mix",
+        "rule_id": "F01",
+        "rule_name": "强酸 + 次氯酸盐释放氯气",
+        "entities": [
+          "hcl",
+          "naocl"
+        ],
+        "concentrations": {
+          "hcl": 10.0,
+          "naocl": 6.6667
+        },
+        "contact_seconds": null,
+        "allowed_seconds": null,
+        "severity": "critical",
+        "reason": "强酸使次氯酸盐转化为氯气（Cl₂），高毒、强刺激，吸入可致死。",
+        "guidance": "严禁向漂白水中加酸；废液须分别中和（次氯酸盐用硫代硫酸钠还原）后处置。",
+        "blocking_reason": "禁配组合：强酸 + 次氯酸盐释放氯气（F01）在步骤 1 首次共存"
+      }
+    ],
+    "final_state": {
+      "seq": 1,
+      "op": "add",
+      "at_seconds": 30.0,
+      "liquid_volume_ml": 150.0,
+      "cleaned": false,
+      "components": [
+        {
+          "reagent_id": "hcl",
+          "name": "盐酸（氯化氢）",
+          "concentration": 10.0,
+          "pure_volume_ml": 15.0
+        },
+        {
+          "reagent_id": "naocl",
+          "name": "次氯酸钠溶液（漂白水）",
+          "concentration": 6.6667,
+          "pure_volume_ml": 10.0
+        }
+      ]
+    },
+    "steps": [
+      {
+        "seq": 1,
+        "op": "add",
+        "at_seconds": 30.0,
+        "liquid_volume_ml": 150.0,
+        "cleaned": false,
+        "components": [
+          {
+            "reagent_id": "hcl",
+            "name": "盐酸（氯化氢）",
+            "concentration": 10.0,
+            "pure_volume_ml": 15.0
+          },
+          {
+            "reagent_id": "naocl",
+            "name": "次氯酸钠溶液（漂白水）",
+            "concentration": 6.6667,
+            "pure_volume_ml": 10.0
+          }
+        ]
+      }
+    ]
+  },
+  "observations": [
+    {
+      "observation_index": 0,
+      "at_initial": true,
+      "seq": null,
+      "reagent_id": "naocl",
+      "measured_concentration": 10.2,
+      "predicted_concentration": 10.0,
+      "deviation": 0.1999999999999993,
+      "passed": true
+    },
+    {
+      "observation_index": 1,
+      "at_initial": false,
+      "seq": 1,
+      "reagent_id": "hcl",
+      "measured_concentration": 9.8,
+      "predicted_concentration": 10.0,
+      "deviation": 0.1999999999999993,
+      "passed": true
+    },
+    {
+      "observation_index": 2,
+      "at_initial": false,
+      "seq": 1,
+      "reagent_id": "naocl",
+      "measured_concentration": 6.67,
+      "predicted_concentration": 6.666666666666667,
+      "deviation": 0.0033333333333329662,
+      "passed": true
+    },
+    {
+      "observation_index": 3,
+      "at_initial": false,
+      "seq": 1,
+      "reagent_id": "water",
+      "measured_concentration": 0.0,
+      "predicted_concentration": 0.0,
+      "deviation": 0.0,
+      "passed": true
+    }
+  ]
+}
