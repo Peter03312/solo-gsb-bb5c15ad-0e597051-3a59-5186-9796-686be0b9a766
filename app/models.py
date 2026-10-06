@@ -251,6 +251,83 @@ class ErrorDetail(_Strict):
     field: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# 风险物料来源溯源响应（POST /api/v1/precheck-provenance 等）
+# ---------------------------------------------------------------------------
+class SourceRef(_Strict):
+    type: Literal["initial", "add"] = Field(
+        ..., description="来源类型：initial=容器初始液体；add=后续加液步骤"
+    )
+    reagent_id: str | None = Field(None, description="初始液体来源：试剂编号")
+    vessel_id: str | None = Field(
+        None, description="双容器初始液体来源：容器编号与试剂编号共同标识（add 来源也带其加入容器）"
+    )
+    seq: int | None = Field(None, description="加液来源：步骤序号（同一试剂再次加入按步骤分开）")
+
+
+class ReagentSourceItem(_Strict):
+    source: SourceRef = Field(..., description="该份纯物量的来源（初始液体试剂编号 / 加液步骤序号；双容器另带容器编号）")
+    pure_volume_ml: float = Field(..., description="风险触发时该来源在触发容器中仍存的纯物体积（mL）")
+    fraction: float = Field(..., description="上述纯物量占触发容器内该试剂全部纯物量的比例 [0,1]")
+
+
+class ReagentSources(_Strict):
+    reagent_id: str = Field(..., description="风险涉及的试剂编号")
+    total_pure_volume_ml: float = Field(..., description="风险触发时该试剂在触发容器内的纯物量合计（mL）")
+    sources: list[ReagentSourceItem] = Field(..., description="该试剂各来源批次的仍存纯物量与占比；无风险为空")
+
+
+class MaterialRef(_Strict):
+    material_id: str = Field(..., description="材质风险涉及的容器材质编号（不计算液体份额）")
+
+
+class TransferMaterialRef(MaterialRef):
+    vessel_id: str = Field(..., description="材质风险触发的容器编号")
+
+
+class RiskSourceTrace(_Strict):
+    finding_index: int = Field(..., description="对应 precheck.findings 的下标（0 起，按原排序）")
+    seq: int | None = Field(..., description="风险触发步骤序号；初始液体触发为 0")
+    category: Literal["forbidden_mix", "overtime_contact", "material_incompatible"]
+    rule_id: str
+    material: MaterialRef | None = Field(
+        None, description="仅材质不相容/超时材质风险非空：标明触发容器材质；材质不给液体份额"
+    )
+    reagent_sources: list[ReagentSources] = Field(
+        ..., description="风险涉及试剂的来源明细（触发时刻仍存纯物量及占该试剂纯物量比例）"
+    )
+
+
+class TransferRiskSourceTrace(_Strict):
+    finding_index: int = Field(..., description="对应 precheck.findings 的下标（0 起，按原排序）")
+    seq: int | None = Field(..., description="风险触发步骤序号；初始液体触发为 0")
+    vessel_id: str = Field(..., description="风险触发容器编号")
+    category: Literal["forbidden_mix", "overtime_contact", "material_incompatible"]
+    rule_id: str
+    material: TransferMaterialRef | None = Field(
+        None, description="仅材质风险非空：标明触发容器及材质；材质不给液体份额"
+    )
+    reagent_sources: list[ReagentSources] = Field(
+        ..., description="风险涉及试剂在触发容器内的来源明细（触发时刻仍存纯物量及占比）"
+    )
+
+
+class PrecheckProvenanceResponse(_Strict):
+    precheck: PrecheckResponse = Field(..., description="原预检结果，结构与 POST /api/v1/precheck 响应逐字段一致")
+    risk_sources: list[RiskSourceTrace] = Field(
+        ..., description="每条风险的物料来源溯源，finding_index 与 precheck.findings 对齐；无风险为空数组"
+    )
+
+
+class TransferPrecheckProvenanceResponse(_Strict):
+    precheck: TransferPrecheckResponse = Field(
+        ..., description="原转移预检结果，结构与 POST /api/v1/transfer-precheck 响应逐字段一致"
+    )
+    risk_sources: list[TransferRiskSourceTrace] = Field(
+        ..., description="每条风险的物料来源溯源，finding_index 与 precheck.findings 对齐；无风险为空数组"
+    )
+
+
 class ErrorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     error: Literal["validation_error", "simulation_error", "internal_error"]

@@ -8,6 +8,9 @@
 - transfer_out/in: pour 的“跨容器”版本，转出侧按比例缩减，转入侧计入纯物量与体积
 - clean:    清空全部状态，接触计时归零
 
+溯源模式（lot_mode 非 None）另维护“来源批次”台账 lots：批次随纯物量一起按比例
+分摊（pour/transfer），dilute 不动、clean 清空；原预检/核对不启用该台账。
+
 每个实体对（试剂-试剂 / 试剂-材质）的每条匹配规则维护一个“接触片段”：
 条件满足期间计时；超时在时间推进到下一个操作点时检查。
 """
@@ -56,6 +59,23 @@ class RuleEpisode:
 
 
 # ---------------------------------------------------------------------------
+# 物料来源批次（风险溯源用）
+#
+# 同一试剂的纯物量按“加入批次”分开记账：
+# - 单容器：初始液体批次键为试剂编号，加液批次键为 step:<seq>；
+# - 双容器：批次键再带容器编号前缀（<vessel>:<reagent> / <vessel>:step:<seq>），
+#   跨容器转移时批次键与来源描述符保持不变（同一来源），并入目标时按键合并。
+# 倒出 / 转移按充分混合比例同步缩放各批次；稀释不动批次；清洗清空批次。
+# ---------------------------------------------------------------------------
+@dataclass
+class Lot:
+    key: str
+    reagent_id: str
+    amount: float          # 该批次当前仍存的纯物体积（mL）
+    source: dict           # 来源描述符（{"type": "initial", ...} / {"type": "add", ...}）
+
+
+# ---------------------------------------------------------------------------
 # 规则触发事件（由上层引擎翻译为响应 finding）
 # ---------------------------------------------------------------------------
 @dataclass
@@ -77,15 +97,19 @@ class VesselState:
     now: float = 0.0
     # pair_key -> {rule_id: episode}
     contacts: dict[tuple[str, str], dict[str, RuleEpisode]] = field(default_factory=dict)
+    # 物料来源批次：lot_key -> Lot（溯源模式下启用）
+    lots: dict[str, Lot] = field(default_factory=dict)
 
 
 class VesselRuntime:
     """一只容器的状态机：浓度簿记、接触片段对账与超时判定。"""
 
-    def __init__(self, vessel_id: str, vessel_material: str):
+    def __init__(self, vessel_id: str, vessel_material: str, lot_mode: str | None = None):
         self.vessel_id = vessel_id
         self.vessel_material = vessel_material
         self.mat_tok = material_token(vessel_material)
+        # None=不做批次记账（原预检行为）；"single"/"dual" 控制批次键与来源描述符形态
+        self.lot_mode = lot_mode
         self.state = VesselState(vessel_id=vessel_id, vessel_material=vessel_material)
 
     # ---------------- 浓度与组分 ----------------
@@ -118,24 +142,52 @@ class VesselRuntime:
         }
 
     # ---------------- 初始 / 操作 ----------------
+    def _lot_prefix(self) -> str:
+        return f"{self.vessel_id}:" if self.lot_mode == "dual" else ""
+
+    def _initial_lot_key(self, rid: str) -> str:
+        return f"{self._lot_prefix()}{rid}"
+
+    def _add_lot_key(self, seq: int) -> str:
+        return f"{self._lot_prefix()}step:{seq}"
+
+    def _add_lot(self, key: str, rid: str, amount: float, source: dict) -> None:
+        """登记/合并一个来源批次（同一试剂再次加入须与旧来源分开：键不同即独立）。"""
+        lot = self.state.lots.get(key)
+        if lot is not None:
+            # 同一来源批次并入（如跨容器多跳转移回到其原始容器）
+            lot.amount += amount
+        else:
+            self.state.lots[key] = Lot(key=key, reagent_id=rid, amount=amount, source=dict(source))
+
     def load_initial(self, initial: list[tuple[str, float, float]]) -> None:
         s = self.state
         for rid, conc, vol in initial:
-            s.pure_ml[rid] = s.pure_ml.get(rid, 0.0) + conc * vol / 100.0
+            amount = conc * vol / 100.0
+            s.pure_ml[rid] = s.pure_ml.get(rid, 0.0) + amount
             s.total_ml += vol
+            if self.lot_mode is not None:
+                source = {"type": "initial", "reagent_id": rid}
+                if self.lot_mode == "dual":
+                    source = {"type": "initial", "vessel_id": self.vessel_id, "reagent_id": rid}
+                self._add_lot(self._initial_lot_key(rid), rid, amount, source)
         if initial:
             s.cleaned = False
 
     def advance(self, now: float) -> None:
         self.state.now = now
 
-    def apply_add(self, rid: str, concentration: float, volume_ml: float) -> None:
+    def apply_add(self, rid: str, concentration: float, volume_ml: float, source: dict | None = None) -> None:
         s = self.state
+        amount = concentration * volume_ml / 100.0
         s.cleaned = False
-        s.pure_ml[rid] = s.pure_ml.get(rid, 0.0) + concentration * volume_ml / 100.0
+        s.pure_ml[rid] = s.pure_ml.get(rid, 0.0) + amount
         s.total_ml += volume_ml
+        if self.lot_mode is not None and source is not None:
+            self._add_lot(source["key"], rid, amount, source["descriptor"])
 
     def apply_dilute(self, volume_ml: float) -> None:
+        # 稀释只加纯水：纯物量与来源批次均不变（稀释不产生来源）
         self.state.total_ml += volume_ml
 
     def apply_pour(self, volume_ml: float) -> None:
@@ -146,6 +198,7 @@ class VesselRuntime:
         if s.total_ml <= _EPS:
             s.total_ml = 0.0
             s.pure_ml.clear()
+            s.lots.clear()
 
     def apply_clean(self) -> None:
         s = self.state
@@ -153,32 +206,41 @@ class VesselRuntime:
         s.pure_ml.clear()
         s.cleaned = True
         s.contacts.clear()
+        s.lots.clear()  # 清洗清空来源
 
-    def transfer_out(self, volume_ml: float) -> dict[str, float]:
-        """按充分混合比例转出 volume_ml，返回各组分转出的纯物体积映射。
+    def transfer_out(self, volume_ml: float) -> tuple[dict[str, float], dict[str, Lot]]:
+        """按充分混合比例转出 volume_ml。
 
-        转出后各组分浓度不变（部分转出）；完全转空则终止本容器全部接触。
+        返回 (各组分转出纯物体积映射, 转出的来源批次映射)；转出侧各批次按比例同步缩减，
+        批次的来源描述符随纯物量一起跨容器延续。完全转空则终止本容器全部接触与来源。
         """
         s = self.state
         f = volume_ml / s.total_ml
         moved: dict[str, float] = {}
         for rid in list(s.pure_ml.keys()):
-            amount = s.pure_ml[rid] * f
-            moved[rid] = amount
+            moved[rid] = s.pure_ml[rid] * f
+        moved_lots: dict[str, Lot] = {}
+        for key, lot in list(self.state.lots.items()):
+            out_amount = lot.amount * f
+            moved_lots[key] = Lot(key=lot.key, reagent_id=lot.reagent_id, amount=out_amount, source=dict(lot.source))
         self._scale(1.0 - f)
         s.total_ml -= volume_ml
         if s.total_ml <= _EPS:
             s.total_ml = 0.0
             s.pure_ml.clear()
-        return moved
+            s.lots.clear()
+        return moved, moved_lots
 
-    def transfer_in(self, moved_pure: dict[str, float], volume_ml: float) -> None:
-        """接收一次定量转移：volume_ml 体积、moved_pure 各组分纯物量计入本容器。"""
+    def transfer_in(self, moved_pure: dict[str, float], moved_lots: dict[str, Lot], volume_ml: float) -> None:
+        """接收一次定量转移：体积、各组分纯物量与来源批次计入本容器。"""
         s = self.state
         s.cleaned = False
         for rid, amount in moved_pure.items():
             if amount > _EPS:
                 s.pure_ml[rid] = s.pure_ml.get(rid, 0.0) + amount
+        for key, lot in moved_lots.items():
+            if lot.amount > _EPS:
+                self._add_lot(key, lot.reagent_id, lot.amount, lot.source)
         s.total_ml += volume_ml
 
     def _scale(self, factor: float) -> None:
@@ -186,6 +248,13 @@ class VesselRuntime:
             self.state.pure_ml[rid] *= factor
             if self.state.pure_ml[rid] < _EPS:
                 del self.state.pure_ml[rid]
+        # 倒出 / 转出：各来源批次按同一充分混合比例同步分摊
+        for key, lot in list(self.state.lots.items()):
+            remaining = lot.amount * factor
+            if remaining < _EPS:
+                del self.state.lots[key]
+            else:
+                lot.amount = remaining
 
     def pure_ml_keys(self):
         return list(self.state.pure_ml.keys())

@@ -16,10 +16,13 @@ _EPS = 1e-9
 
 
 class Engine:
+    # 溯源子类覆盖为 "single"；原预检保持 None（不做批次记账）
+    lot_mode: str | None = None
+
     def __init__(self, plan: Plan):
         self.plan = plan
         self.runtime = VesselRuntime(
-            vessel_id="vessel", vessel_material=plan.vessel_material
+            vessel_id="vessel", vessel_material=plan.vessel_material, lot_mode=self.lot_mode
         )
         self.findings: list[dict] = []
         self.traces: list[dict] = []

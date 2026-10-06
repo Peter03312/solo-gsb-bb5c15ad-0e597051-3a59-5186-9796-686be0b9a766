@@ -12,10 +12,12 @@ from .engine import simulate
 from .models import (
     ErrorDetail,
     ErrorResponse,
+    PrecheckProvenanceResponse,
     PrecheckRequest,
     PrecheckResponse,
     ReconcileRequest,
     ReconcileResponse,
+    TransferPrecheckProvenanceResponse,
     TransferPrecheckRequest,
     TransferPrecheckResponse,
     TransferReconcileRequest,
@@ -24,18 +26,21 @@ from .models import (
 from .reconcile import reconcile_single, reconcile_transfer
 from .responses import build_precheck_response, build_transfer_precheck_response
 from .rules import RULESET_VERSION, RULES_BY_ID
+from .tracing import TracingSingleEngine, TracingTransferEngine
 from .transfer_engine import simulate_transfer
 from .transfer_validator import build_transfer_plan
 from .validator import build_plan
 
 app = FastAPI(
     title="化学试剂混配风险预检 API",
-    version="1.2.0",
+    version="1.3.0",
     description=(
         "提交容器初始液体、按顺序执行的加液步骤、试剂浓度与体积，以及容器材质和温度；"
         "逐步计算混配后各组分浓度，识别禁配组合、超时接触与材质不相容。"
         "另提供双容器转移预检 /api/v1/transfer-precheck，"
-        "以及单/双容器实测浓度核对 /api/v1/reconcile、/api/v1/transfer-reconcile。"
+        "单/双容器实测浓度核对 /api/v1/reconcile、/api/v1/transfer-reconcile，"
+        "以及风险触发时的物料来源溯源 /api/v1/precheck-provenance、"
+        "/api/v1/transfer-precheck-provenance。"
     ),
 )
 
@@ -121,6 +126,31 @@ async def transfer_precheck(req: TransferPrecheckRequest) -> TransferPrecheckRes
     plan = build_transfer_plan(req)
     result = simulate_transfer(plan)
     return build_transfer_precheck_response(plan, result)
+
+
+@app.post("/api/v1/precheck-provenance", response_model=PrecheckProvenanceResponse)
+async def precheck_provenance(req: PrecheckRequest) -> PrecheckProvenanceResponse:
+    """单容器预检 + 风险触发时的物料来源溯源；非法输入沿用原预检的整单拒绝。"""
+    plan = build_plan(req)
+    result = TracingSingleEngine(plan).run()
+    return PrecheckProvenanceResponse(
+        precheck=build_precheck_response(plan, result),
+        risk_sources=result["source_traces"],
+    )
+
+
+@app.post(
+    "/api/v1/transfer-precheck-provenance",
+    response_model=TransferPrecheckProvenanceResponse,
+)
+async def transfer_precheck_provenance(req: TransferPrecheckRequest) -> TransferPrecheckProvenanceResponse:
+    """双容器转移预检 + 风险触发时的物料来源溯源；非法输入沿用原转移预检的整单拒绝。"""
+    plan = build_transfer_plan(req)
+    result = TracingTransferEngine(plan).run()
+    return TransferPrecheckProvenanceResponse(
+        precheck=build_transfer_precheck_response(plan, result),
+        risk_sources=result["source_traces"],
+    )
 
 
 @app.post("/api/v1/reconcile", response_model=ReconcileResponse)

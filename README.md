@@ -20,7 +20,11 @@
 > 2. **配液核对（实测浓度对账）** `POST /api/v1/reconcile` 与
 >    `POST /api/v1/transfer-reconcile`
 >    （[说明见此节](#配液核对实测浓度对账本轮新增)）：提交原流程请求、统一容差与若干实测观测，
->    服务先沿用原预检校验与模拟，再用**未四舍五入**的预测浓度逐条对账。
+>    服务先沿用原预检校验与模拟，再用**未四舍五入**的预测浓度逐条对账；
+> 3. **风险物料来源溯源** `POST /api/v1/precheck-provenance` 与
+>    `POST /api/v1/transfer-precheck-provenance`
+>    （[说明见此节](#风险物料来源溯源本轮新增)）：请求体与原预检完全相同，
+>    响应内嵌**原预检结果**，并为每条风险列出涉及试剂的**来源、触发时仍存纯物量及占该试剂纯物量比例**。
 >
 > 原 `/api/v1/precheck` 单容器预检的**请求与响应完全保持兼容，启动方式不变**
 > （仍是同一个 `uvicorn app.main:app` / `docker compose up`，同一端口 8000）。
@@ -34,6 +38,7 @@
 - [API 说明](#api-说明)
 - [双容器转移预检（本轮新增）](#双容器转移预检本轮新增)
 - [配液核对：实测浓度对账（本轮新增）](#配液核对实测浓度对账本轮新增)
+- [风险物料来源溯源（本轮新增）](#风险物料来源溯源本轮新增)
 - [逐步状态与浓度模型](#逐步状态与浓度模型)
 - [操作类型](#操作类型)
 - [规则、阈值与接触计时](#规则阈值与接触计时)
@@ -83,6 +88,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | `POST` | `/api/v1/transfer-precheck` | **双容器转移预检**：两只容器之间的定量转移与静置，返回带容器编号的风险与两侧状态 |
 | `POST` | `/api/v1/reconcile` | **单容器配液核对**：原预检请求 + 统一容差 + 实测观测，返回原预检结果、逐条预测/偏差与最早超差位置 |
 | `POST` | `/api/v1/transfer-reconcile` | **双容器配液核对**：同上对账语义，每条观测另须指定容器编号 |
+| `POST` | `/api/v1/precheck-provenance` | **单容器风险来源溯源**：请求同 `/precheck`，返回原预检结果 + 每条风险涉及试剂的来源/仍存纯物量/占比 |
+| `POST` | `/api/v1/transfer-precheck-provenance` | **双容器风险来源溯源**：请求同 `/transfer-precheck`，来源另带来源容器编号，材质风险标明触发容器 |
 
 ### 请求体
 
@@ -366,6 +373,142 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
+## 风险物料来源溯源（本轮新增）
+
+`POST /api/v1/precheck-provenance`（单容器）与
+`POST /api/v1/transfer-precheck-provenance`（双容器）回答：**每条风险触发时，涉及的试剂是哪一份物料？
+当时还剩多少？占该试剂现存纯物量的多少？**
+
+- **请求体与原预检完全相同**（单容器即 `/api/v1/precheck` 的请求体；双容器即
+  `/api/v1/transfer-precheck` 的请求体），无需任何额外字段；
+- 响应的 **`precheck` 字段是原预检的完整结果**，结构与原预检响应逐字段一致；
+- **`risk_sources[]`** 与 `precheck.findings[]` 按下标一一对应（`finding_index`）；
+  **无风险时为空数组**；
+- 非法输入**沿用原预检的整单拒绝**（同一批错误码、同一 400 结构），不返回任何部分结果。
+
+### 来源如何标识
+
+| 场景 | 来源标识 |
+| --- | --- |
+| 单容器初始液体 | `{"type": "initial", "reagent_id": "<试剂编号>"}` |
+| 单容器后续加液 | `{"type": "add", "seq": <步骤序号>}` |
+| 双容器初始液体 | `{"type": "initial", "vessel_id": "<容器编号>", "reagent_id": "<试剂编号>"}` |
+| 双容器后续加液 | 双容器流程只有 `transfer`/`hold`，加液只能来自初始液体 |
+
+- **同一试剂再次加入与旧来源分开**：同试剂的每次加入都是独立批次（单容器按 `seq` 区分），
+  占比分别计算，不做合并；
+- **稀释不产生来源**：`dilute` 只加纯水，各来源批次的纯物量与占比不变；
+- **倒出 / 跨容器转移按充分混合比例同步分摊**：一次倒出 30%，每个来源批次的仍存纯物量都 ×70%；
+  转移时来源批次**带着来源标识进入目标容器**（目标容器内因此可能出现同一试剂的多个来源，
+  如“本容器初始 2 mL + 另一容器转入 10 mL”）；
+- **清洗清空来源**：`clean` 后重新加入的试剂只记新来源；
+- 比例分母是**触发容器内该试剂触发时刻的全部纯物量**（即各来源 `pure_volume_ml` 之和），
+  因此同一试剂各来源的 `fraction` 合计为 1。
+
+### 触发时刻快照（超时不会被后续操作改写）
+
+- 禁配 / 立即材质风险：在**该步操作完成后**的状态上拍快照；
+- **超时风险：按触发时刻、该步操作执行前的物料归属溯源**——时间推进结算超时之后、
+  真正执行 pour/transfer/clean 之前取数；因此**后续倒出或转空不会改写已触发风险**的明细；
+- 初始液体触发的风险 `seq=0`。
+
+### 响应要点
+
+```json
+{
+  "precheck": { "...": "原预检完整响应" },
+  "risk_sources": [
+    {
+      "finding_index": 0,
+      "seq": 3,
+      "category": "forbidden_mix",
+      "rule_id": "F01",
+      "material": null,
+      "reagent_sources": [
+        {
+          "reagent_id": "hcl",
+          "total_pure_volume_ml": 15.0,
+          "sources": [
+            {"source": {"type": "add", "reagent_id": null, "vessel_id": null, "seq": 3},
+             "pure_volume_ml": 15.0, "fraction": 1.0}
+          ]
+        },
+        {
+          "reagent_id": "naocl",
+          "total_pure_volume_ml": 10.0,
+          "sources": [
+            {"source": {"type": "initial", "reagent_id": "naocl", "vessel_id": null, "seq": null},
+             "pure_volume_ml": 5.0, "fraction": 0.5},
+            {"source": {"type": "add", "reagent_id": null, "vessel_id": null, "seq": 1},
+             "pure_volume_ml": 5.0, "fraction": 0.5}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `pure_volume_ml` 为风险**触发时刻**该来源在触发容器中**仍存**的纯物体积（mL）；
+  `fraction` 为其占触发容器内该试剂纯物量合计的比例 `[0, 1]`；
+- **材质风险另标明触发容器及材质**（单容器为 `{"material_id": ...}`；
+  双容器为 `{"vessel_id": ..., "material_id": ...}`），**材质不计算液体份额**，
+  该字段只有材质类/限时材质风险才非空；
+- 双容器每条 `risk_sources[]` 额外带 **`vessel_id`**（风险触发容器；排序同 findings：
+  `(seq, 类别, 容器提交顺序)`），转入引发的风险会把液体追溯到**来源容器**的初始液体。
+
+完整样例：[`examples/provenance_forbidden.json`](examples/provenance_forbidden.json) +
+[`examples/provenance_forbidden_response.json`](examples/provenance_forbidden_response.json)
+（含同试剂分批、倒出按比例分摊）；
+[`examples/transfer_provenance.json`](examples/transfer_provenance.json) +
+[`examples/transfer_provenance_response.json`](examples/transfer_provenance_response.json)。
+
+### 调用示例
+
+```bash
+# 单容器：请求体与 /api/v1/precheck 完全一致
+curl -s http://localhost:8000/api/v1/precheck-provenance \
+  -H 'Content-Type: application/json' \
+  --data @examples/provenance_forbidden.json | python -m json.tool
+
+# 双容器：请求体与 /api/v1/transfer-precheck 完全一致
+curl -s http://localhost:8000/api/v1/transfer-precheck-provenance \
+  -H 'Content-Type: application/json' \
+  --data @examples/transfer_provenance.json | python -m json.tool
+```
+
+```python
+import requests
+
+payload = {
+    "vessel_material": "hdpe",
+    "temperature_c": 22.0,
+    "initial_liquid": [{"reagent_id": "naocl", "concentration": 10, "volume_ml": 100}],
+    "steps": [
+        {"seq": 1, "op": "add", "reagent_id": "hcl", "concentration": 30, "volume_ml": 50},
+    ],
+}
+r = requests.post("http://localhost:8000/api/v1/precheck-provenance", json=payload, timeout=10)
+r.raise_for_status()
+data = r.json()
+for trace in data["risk_sources"]:
+    finding = data["precheck"]["findings"][trace["finding_index"]]
+    print(f"风险 {trace['rule_id']}（步骤 {trace['seq']}）：{finding['blocking_reason']}")
+    for rs in trace["reagent_sources"]:
+        for item in rs["sources"]:
+            src = item["source"]
+            origin = (f"初始试剂 {src['reagent_id']}" if src["type"] == "initial"
+                      else f"步骤 {src['seq']} 加入")
+            print(f"  {rs['reagent_id']} <- {origin}：仍存 {item['pure_volume_ml']} mL，"
+                  f"占该试剂 {item['fraction']:.1%}")
+```
+
+双容器改用 `/api/v1/transfer-precheck-provenance`，请求体与转移预检相同；
+来源的 `source.vessel_id` 标明物料最初来自哪只容器，`risk_sources[].vessel_id`
+标明风险在哪只容器触发。
+
+---
+
 ## 逐步状态与浓度模型
 
 采用透明的“**纯物体积**”簿记（体积可加、充分混合假设）：
@@ -613,6 +756,10 @@ python3 -m pytest -q
 （同位置按提交顺序）定位、乱序 seq 归一化、空观测仅返回预检、清洗后位置按零，
 以及未知步骤/容器/试剂、重复观测、浓度越界、非法容差、原流程无效整单拒绝且无部分对账
 （`tests/test_reconcile_api.py` 27 个、`tests/test_transfer_reconcile_api.py` 16 个用例）。
+风险来源溯源另覆盖：初始按试剂编号/加液按步骤序号标识、同试剂再次加入分开、稀释不产生来源、
+倒出按比例分摊、清洗清空、超时按操作前归属溯源且后续倒出/转空/清洗不改写、
+双容器转移带来源且同试剂不同容器来源分开、来源按容器提交序、材质风险标注触发容器与材质
+（`tests/test_provenance_api.py` 13 个、`tests/test_transfer_provenance_api.py` 12 个用例）。
 
 ## 项目结构
 
@@ -629,12 +776,15 @@ app/
   transfer_engine.py    # 双容器预检：两侧 runtime + transfer/hold 重放
   responses.py          # 预检响应组装（预检端点与配液核对共用，保证 precheck 字段一致）
   reconcile.py          # 配液核对：原校验/模拟 + 未四舍五入预测浓度逐条对账、最早超差定位
+  tracing.py            # 风险来源溯源：来源批次快照（触发时刻取数，超时取操作前状态）
   main.py               # FastAPI 路由与异常映射
-examples/                 # curl 可用的请求/响应样例（含 transfer_*、reconcile_* 样例）
+examples/                 # curl 可用的请求/响应样例（含 transfer_*、reconcile_*、*_provenance_* 样例）
 tests/test_api.py
 tests/test_transfer_api.py
 tests/test_reconcile_api.py
 tests/test_transfer_reconcile_api.py
+tests/test_provenance_api.py
+tests/test_transfer_provenance_api.py
 Dockerfile
 docker-compose.yml
 ```

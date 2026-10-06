@@ -25,10 +25,14 @@ _EPS = 1e-9
 
 
 class TwoVesselEngine:
+    # 溯源子类覆盖为 "dual"；原转移预检保持 None（不做批次记账）
+    lot_mode: str | None = None
+
     def __init__(self, plan: TransferPlan):
         self.plan = plan
         self.runtimes: list[VesselRuntime] = [
-            VesselRuntime(vessel_id=spec.vessel_id, vessel_material=spec.vessel_material) for spec in plan.vessels
+            VesselRuntime(vessel_id=spec.vessel_id, vessel_material=spec.vessel_material, lot_mode=self.lot_mode)
+            for spec in plan.vessels
         ]
         self.by_id: dict[str, VesselRuntime] = {rt.vessel_id: rt for rt in self.runtimes}
         self.findings: list[dict] = []
@@ -151,8 +155,8 @@ class TwoVesselEngine:
             if st.op == "transfer":
                 src = self.by_id[st.from_vessel]  # type: ignore[index]
                 dst = self.by_id[st.to_vessel]  # type: ignore[index]
-                moved = src.transfer_out(st.volume_ml)  # type: ignore[arg-type]
-                dst.transfer_in(moved, st.volume_ml)  # type: ignore[arg-type]
+                moved, moved_lots = src.transfer_out(st.volume_ml)  # type: ignore[arg-type]
+                dst.transfer_in(moved, moved_lots, st.volume_ml)  # type: ignore[arg-type]
 
             # 3) 两侧对账（先源后目标；同刻按 seq 已定序，同一容器内按规则顺序确定）
             if st.op == "transfer":
